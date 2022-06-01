@@ -27,10 +27,20 @@ except (ModuleNotFoundError, ImportError):
 
 logging.basicConfig(filename='block.log', format='%(levelname)s:%(message)s', level=logging.DEBUG)
 
+def initial_connect():
+    try:
+        node = SimpleNode(HOST, testnet=True, logging=False)
+        node.handshake()
+    except (socket.gaierror, ConnectionRefusedError) as e:
+        print(e)
+        print("Please ensure that your wallet and node are both online. If either aren't, consider running the wallet in offline mode temporarily")
+        quit()
+
+
 def block_syncer():
+    # As long as wallet is running
     node = SimpleNode(HOST, testnet=True, logging=False)
     node.handshake()
-    # As long as wallet is running
     while True:
         now_hash = get_latest_block_hash()
         then_hash = read_log(-1)
@@ -38,6 +48,18 @@ def block_syncer():
         bf = BloomFilter(size=30, function_count=5, tweak=1729)
         # if a new block has been mined 
         if now_hash != then_hash:
+            if is_synched():
+                users = get_all_users()
+                for user in users:
+                    with open(f"{user}_utxos.csv", 'r') as utxo_file:
+                        r = csv.reader(utxo_file)
+                        utxos = list(r)
+                        for utxo in utxos:
+                            if utxo[6] == TXOState.UNCONFIRMED_STXO.value:
+                                utxo[6] = TXOState.CONFIRMED_UTXO.value
+                    with open(f"{user}_utxos.csv", 'w') as utxo_file:
+                        w = csv.writer(utxo_file)
+                        w.writerows(utxos)
             for addr in current_addr:
                 h160 = decode_base58(addr)
                 bf.add(h160)
@@ -93,7 +115,7 @@ def block_syncer():
                             for i, tx_in in enumerate(message.tx_ins):
                                 for tx_id in ids:
                                     if tx_id[0] == tx_in.prev_tx.hex() and int(tx_id[1]) == tx_in.prev_index:
-                                        tx_set_flag(tx_id[2], tx_id[0], '3', tx_id[1])
+                                        tx_set_flag(tx_id[2], tx_id[0], TXOState.CONFIRMED_STXO.value, tx_id[1])
                     except SyntaxError:
                         logging.info("recieved an invalid script")
             except RuntimeError:

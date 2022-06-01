@@ -9,7 +9,8 @@ from ProgrammingBitcoin.network import SimpleNode
 from ProgrammingBitcoin.op import OP_CODE_FUNCTIONS
 
 from jbok import make_address, get_pkobj
-from block_utils import tx_set_flag, tx_set_new
+from block_utils import tx_set_flag, tx_set_new, TXOState
+from segwit import make_p2wx_script, decode_bech32
 
 try:
     from network_settings import HOST
@@ -50,7 +51,7 @@ def get_all_utxos(username):
             output.append(utxo)
     return output 
 
-def multi_send(username):
+def multi_send(username, online=True):
     num_r = input("Number of recipients: ")
     try:
         num_r = int(num_r)
@@ -65,12 +66,28 @@ def multi_send(username):
     try:
         for i in range(num_r):
             target_address = input(f"Recipient {i+1}: ")
+            prefix = target_address[0]
+            long_prefix = target_address[:3]
             try:
-                target_h160 = decode_base58(target_address)
+                if prefix == "m" or prefix == "n":
+                    target_h160 = decode_base58(target_address)
+                    target_script = p2pkh_script(target_h160)
+                elif long_prefix == "tb1":
+                    target_h160, version = decode_bech32(target_address, testnet=True)
+                    if version == 0:
+                        target_script = make_p2wx_script(target_h160)
+                    elif version == 1:
+                        print("this wallet does not currently support taproot")
+                        return None
+                    else:
+                        print("unknown segwit version")
+                        return None
+                else:
+                    print("address not recognized, this wallet currently supports the following address types: p2pkh, p2wsh, p2wpkh")
+                    return
             except ValueError:
                 print("invalid address")
                 return None
-            target_script = p2pkh_script(target_h160)
             try:
                 target_amount = int(input("Amount(in Satoshis): "))
             except ValueError:
@@ -139,14 +156,21 @@ def multi_send(username):
     print("transaction id")
     print(tx_obj.id())
 
-    node = SimpleNode(HOST, testnet=True, logging=False)
-    node.handshake()
-    node.send(tx_obj)
-    print('tx sent!')
+    self_broadcast = None
+    if online:
+        node = SimpleNode(HOST, testnet=True, logging=False)
+        node.handshake()
+        node.send(tx_obj)
+        print('tx sent!')
+        self_broadcast = 'n'
+    else:
+        while self_broadcast != 'n' and self_broadcast != 'y':
+            self_broadcast = input("Did you broadcast this transaction yourself?[y/n]")
 
-    for utxo in used_utxos:
-        tx_set_flag(username, utxo, '2') 
+    if online or self_broadcast == 'y':
+        for utxo in used_utxos:
+            tx_set_flag(username, utxo, TXOState.UNCONFIRMED_STXO.value)
     
-    if 'change_address' in locals():
-        change_index = len(tx_obj.tx_outs) - 1 
-        tx_set_new(username, tx_obj.id(), change_index, change_amount, change_address, change_script, "0")
+        if 'change_address' in locals():
+            change_index = len(tx_obj.tx_outs) - 1 
+            tx_set_new(username, tx_obj.id(), change_index, change_amount, change_address, change_script, "0")
